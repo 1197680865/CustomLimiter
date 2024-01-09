@@ -1,4 +1,4 @@
-package com.example.customlimiter;
+package com.example.customlimiter.aspect;
 
 import java.lang.reflect.Method;
 import java.util.HashMap;
@@ -7,7 +7,6 @@ import java.util.Map;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
-import org.aspectj.lang.annotation.Pointcut;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.core.ParameterNameDiscoverer;
@@ -16,7 +15,12 @@ import org.springframework.expression.Expression;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.expression.spel.support.StandardEvaluationContext;
 import org.springframework.stereotype.Component;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
+import com.example.customlimiter.cache.LimitChecker;
+
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -28,13 +32,34 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class MyLimitAOP {
 
-    @Pointcut("@annotation(com.example.customlimiter.MyLimit)")
-    public void pointCut() {
+    @Resource
+    private LimitChecker redisLimitChecker;
+
+//
+//    /**
+//     * 对加有@RestController类下的所有方法生效
+//     */
+//    @Around("@within(org.springframework.web.bind.annotation.RestController)")
+//    public Object aroundRestControllerAnno(ProceedingJoinPoint point) throws Throwable {
+//        return process(point);
+//    }
+
+    /**
+     * 对加有@MyLimit的方法生效
+     */
+    @Around("@annotation(com.example.customlimiter.aspect.MyLimit)")
+    public Object aroundLimitAnno(ProceedingJoinPoint point) throws Throwable {
+        return process(point);
     }
 
-    @Around("pointCut()")
-    public Object around(ProceedingJoinPoint point) throws Throwable {
+    private Object process(ProceedingJoinPoint point) throws Throwable {
         log.info("======================into MyLimitAOP=======================");
+
+        // 获取URI
+        ServletRequestAttributes requestAttr =
+                (ServletRequestAttributes) RequestContextHolder.currentRequestAttributes();
+        String requestUri = requestAttr.getRequest().getRequestURI();
+
         MethodSignature signature = (MethodSignature) point.getSignature();
         Method method = signature.getMethod();
         MyLimit myLimitAnnotation = method.getAnnotation(MyLimit.class);
@@ -44,13 +69,24 @@ public class MyLimitAOP {
         Map<String, Object> fieldsName = getFieldsName(point);
         log.info("@MyLimit fieldsNameMap:{}", fieldsName);
 
-        generateKey(myLimitAnnotation, fieldsName);
+        String limitKey = generateKey(myLimitAnnotation, fieldsName);
+        String limitCategory = requestUri;
+        boolean canDo = redisLimitChecker.canDo(limitKey, limitCategory);
 
-        log.info("======================end MyLimitAOP=======================");
-        return point.proceed();
+        // 放行
+        if (canDo){
+            log.info("limit pass. limitKey:{}, limitCategory:{}", limitKey, limitCategory);
+            return point.proceed();
+        }
+
+        log.error("limit block. limitKey:{}, limitCategory:{}", limitKey, limitCategory);
+
+        // 拦截
+        throw new RuntimeException("限流");
     }
 
-    private void generateKey(MyLimit myLimitAnnotation,  Map<String, Object> fieldsName ){
+
+    private String generateKey(MyLimit myLimitAnnotation, Map<String, Object> fieldsName) {
         //获取注解上的值如 :  @MyLimit(limitKey = "#user?.id")
         String keyEl = myLimitAnnotation.limitKey();
         log.info("@MyLimit limitKey:{}", keyEl);
@@ -68,16 +104,12 @@ public class MyLimitAOP {
         //解析,获取替换后的结果
         String result = expression.getValue(context).toString();
         log.info("@MyLimit resultKey:{}", result);
+        return result;
 
     }
 
     /**
      * 获取参数列表
-     *
-     * @param joinPoint
-     * @return
-     * @throws ClassNotFoundException
-     * @throws NoSuchMethodException
      */
     private static Map<String, Object> getFieldsName(ProceedingJoinPoint joinPoint) {
         // 参数值

@@ -5,6 +5,8 @@ import org.springframework.expression.Expression;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.expression.spel.support.StandardEvaluationContext;
 
+import com.example.customlimiter.model.User;
+
 /**
  * @author ZhangChen
  * Created in 2024/1/7 20:15
@@ -12,7 +14,7 @@ import org.springframework.expression.spel.support.StandardEvaluationContext;
 public class SpELTest {
 
     public static void main(String[] args) {
-
+        testSPelObject();
 
     }
 

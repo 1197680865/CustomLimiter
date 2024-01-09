@@ -4,6 +4,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.example.customlimiter.aspect.MyLimit;
+import com.example.customlimiter.model.User;
+
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -17,10 +20,7 @@ public class TestController {
     @PostMapping("/getUser")
     @MyLimit(limitKey = "#user?.id")
     public Object getUser(@RequestBody User user){
-
-
         return "success";
-
     }
 
 }

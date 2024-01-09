@@ -1,4 +1,4 @@
-package com.example.customlimiter;
+package com.example.customlimiter.model;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
