@@ -30,7 +30,7 @@ import lombok.extern.slf4j.Slf4j;
 @Aspect
 @Component
 @Slf4j
-public class MyLimitAOP {
+public class LimitAspect {
 
     @Resource
     private LimitChecker redisLimitChecker;
@@ -47,7 +47,7 @@ public class MyLimitAOP {
     /**
      * 对加有@MyLimit的方法生效
      */
-    @Around("@annotation(com.example.customlimiter.aspect.MyLimit)")
+    @Around("@annotation(com.example.customlimiter.aspect.Limiter)")
     public Object aroundLimitAnno(ProceedingJoinPoint point) throws Throwable {
         return process(point);
     }
@@ -62,14 +62,14 @@ public class MyLimitAOP {
 
         MethodSignature signature = (MethodSignature) point.getSignature();
         Method method = signature.getMethod();
-        MyLimit myLimitAnnotation = method.getAnnotation(MyLimit.class);
+        Limiter limiterAnnotation = method.getAnnotation(Limiter.class);
 
         Object[] args = point.getArgs();
         //获取到请求参数
         Map<String, Object> fieldsName = getFieldsName(point);
         log.info("@MyLimit fieldsNameMap:{}", fieldsName);
 
-        String limitKey = generateKey(myLimitAnnotation, fieldsName);
+        String limitKey = generateKey(limiterAnnotation, fieldsName);
         String limitCategory = requestUri;
         boolean canDo = redisLimitChecker.canDo(limitKey, limitCategory);
 
@@ -86,9 +86,9 @@ public class MyLimitAOP {
     }
 
 
-    private String generateKey(MyLimit myLimitAnnotation, Map<String, Object> fieldsName) {
+    private String generateKey(Limiter limiterAnnotation, Map<String, Object> fieldsName) {
         //获取注解上的值如 :  @MyLimit(limitKey = "#user?.id")
-        String keyEl = myLimitAnnotation.limitKey();
+        String keyEl = limiterAnnotation.limitKey();
         log.info("@MyLimit limitKey:{}", keyEl);
 
         //创建解析器

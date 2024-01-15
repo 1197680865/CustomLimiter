@@ -11,7 +11,7 @@ import java.lang.annotation.Target;
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
-public @interface MyLimit {
+public @interface Limiter {
     /**
      * @return 限流key
      * Key需要是Spring Express 表达式： #user?.id
