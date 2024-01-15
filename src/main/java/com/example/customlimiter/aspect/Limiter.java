@@ -13,8 +13,8 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Limiter {
     /**
-     * @return 限流key
-     * Key需要是Spring Express 表达式： #user?.id
+     * @return 限流key. Key需要是Spring Express 表达式： #user?.id
      */
     String limitKey() default "";
+
 }

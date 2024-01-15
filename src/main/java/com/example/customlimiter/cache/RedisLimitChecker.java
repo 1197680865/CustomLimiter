@@ -1,16 +1,15 @@
 package com.example.customlimiter.cache;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
-import com.example.customlimiter.model.LimitConfig;
+import com.example.customlimiter.model.LimiterCategoryConfig;
 
-import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Nonnull;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 
@@ -22,8 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class RedisLimitChecker implements LimitChecker {
 
-
-    private Map<String, LimitConfig> limitConfigMap;
+    public static final long NOT_EXIST_VALUE = -1;
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
@@ -35,42 +33,62 @@ public class RedisLimitChecker implements LimitChecker {
      * 4.如果请求次数大于限制次数，则返回false，否则返回true
      */
     @Override
-    public boolean canDo(String limitKey, String category) {
+    public boolean canDo(@Nonnull String limitKey, @Nonnull LimiterCategoryConfig config) {
 
-        String integer = stringRedisTemplate.opsForValue().get(limitKey);
-        // 读取当前请求次数，读redis
-        int currentQueryCount = Optional.ofNullable(integer).map(Integer::parseInt).orElse(0);
-        log.info("limitKey:{}, currentQueryCount:{}", limitKey, currentQueryCount);
+        try {
 
-        // 写入请求次数+1，并设置过期时间
-        stringRedisTemplate.opsForValue().increment(limitKey);
+            checkParam(limitKey, config);
 
-        // 读取当前category 对应的限制配置
-        LimitConfig limitConfig = limitConfigMap.get(category);
-        if (limitConfig ==null || !limitConfig.paramValid()){
+            // 读取当前请求次数，读redis
+            long currentCount = getLimitValue(limitKey);
+
+            // 写入请求次数+1，并设置过期时间
+            incrBy(limitKey, 1, config.getTtlInMillis());
+
+            // 限流生效检查
+            return canDoResult(currentCount, config.getLimit(), limitKey);
+
+        } catch (Exception e) {
+
+            log.error("canDo error, limitKey:{}:{}", limitKey, config, e);
+            // 异常时 放行
             return true;
         }
+    }
 
+    private boolean canDoResult(long currentCount, long limit, String limitKey) {
+        boolean canDo = currentCount == NOT_EXIST_VALUE || currentCount < limit;
+        log.info("limitKey canDoResult:{},{}", limitKey, canDo);
+        return canDo;
+    }
+
+    private void incrBy(@Nonnull String limitKey, long step, long expireMillis) {
+        // 写入请求次数+1，并设置过期时间
+        stringRedisTemplate.opsForValue().increment(limitKey, step);
         // 设置过期时间检查，过期后重新设置过期时间
         Long expire = stringRedisTemplate.getExpire(limitKey, TimeUnit.MILLISECONDS);
         if (expire == null || expire <= 0) {
-            stringRedisTemplate.expire(limitKey, limitConfig.getTtlInMillis(), TimeUnit.MILLISECONDS);
+            stringRedisTemplate.expire(limitKey, expireMillis, TimeUnit.MILLISECONDS);
         }
 
-        // 限流生效检查
-        if (currentQueryCount >= limitConfig.getLimit()){
-            return false;
+    }
+
+    private long getLimitValue(String limitKey) {
+        String value = stringRedisTemplate.opsForValue().get(limitKey);
+        long currentCount = Optional.ofNullable(value).map(Long::parseLong)
+                .orElse(NOT_EXIST_VALUE);
+        log.info("limitKey:{}, currentCount:{}", limitKey, currentCount);
+        return currentCount;
+    }
+
+
+    private void checkParam(String limitKey, LimiterCategoryConfig config) {
+        if (StringUtils.isEmpty(limitKey)) {
+            throw new IllegalArgumentException("limitKey is empty.");
         }
-
-        return true;
+        if (config == null || !config.paramValid()) {
+            throw new IllegalArgumentException("limit config is invalid.");
+        }
     }
 
-    @PostConstruct
-    public void mockConfig(){
-        limitConfigMap = new HashMap<>();
-
-        // 10分钟只能通过一个请求
-        limitConfigMap.put("/getUser", new LimitConfig(1,60_0000));
-
-    }
 }

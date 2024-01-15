@@ -9,9 +9,15 @@ import lombok.Data;
  */
 @Data
 @AllArgsConstructor
-public class LimitConfig {
+public class LimiterCategoryConfig {
 
-    private int limit;
+    /**
+     * 单位时间的请求个数最大值
+     */
+    private long limit;
+    /**
+     * 单位时间（单位毫秒）
+     */
     private int ttlInMillis;
 
     public boolean paramValid() {

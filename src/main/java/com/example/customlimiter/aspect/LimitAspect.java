@@ -4,9 +4,9 @@ import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.aspectj.lang.ProceedingJoinPoint;
-import org.aspectj.lang.annotation.Around;
+import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.annotation.Aspect;
+import org.aspectj.lang.annotation.Before;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.core.ParameterNameDiscoverer;
@@ -15,10 +15,13 @@ import org.springframework.expression.Expression;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.expression.spel.support.StandardEvaluationContext;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import com.example.customlimiter.cache.LimitChecker;
+import com.example.customlimiter.model.LimiterCategoryConfig;
+import com.example.customlimiter.model.LimitersConfig;
 
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -35,61 +38,75 @@ public class LimitAspect {
     @Resource
     private LimitChecker redisLimitChecker;
 
-//
-//    /**
-//     * 对加有@RestController类下的所有方法生效
-//     */
-//    @Around("@within(org.springframework.web.bind.annotation.RestController)")
-//    public Object aroundRestControllerAnno(ProceedingJoinPoint point) throws Throwable {
-//        return process(point);
-//    }
+    @Resource
+    private LimitersConfig limitersConfig;
+
 
     /**
-     * 对加有@MyLimit的方法生效
+     * 对加有@Limiter的方法生效
      */
-    @Around("@annotation(com.example.customlimiter.aspect.Limiter)")
-    public Object aroundLimitAnno(ProceedingJoinPoint point) throws Throwable {
-        return process(point);
+    @Before("@annotation(com.example.customlimiter.aspect.Limiter)")
+    public void limitBefore(JoinPoint point) {
+
+        boolean pass = true;
+        try {
+
+            pass = check(point);
+
+        } catch (Exception e) {
+
+            log.warn("LimitAspect Exception. point:{}", point, e);
+        }
+
+        if (!pass) {
+            throw new RuntimeException("limit block.");
+        }
     }
 
-    private Object process(ProceedingJoinPoint point) throws Throwable {
-        log.info("======================into MyLimitAOP=======================");
+
+    private boolean check(JoinPoint point) {
 
         // 获取URI
         ServletRequestAttributes requestAttr =
                 (ServletRequestAttributes) RequestContextHolder.currentRequestAttributes();
         String requestUri = requestAttr.getRequest().getRequestURI();
 
+        // 获取注解对象
         MethodSignature signature = (MethodSignature) point.getSignature();
         Method method = signature.getMethod();
         Limiter limiterAnnotation = method.getAnnotation(Limiter.class);
 
-        Object[] args = point.getArgs();
-        //获取到请求参数
+        //获取到请求参数Map
         Map<String, Object> fieldsName = getFieldsName(point);
-        log.info("@MyLimit fieldsNameMap:{}", fieldsName);
 
+        // 生成限流的key
         String limitKey = generateKey(limiterAnnotation, fieldsName);
-        String limitCategory = requestUri;
-        boolean canDo = redisLimitChecker.canDo(limitKey, limitCategory);
 
-        // 放行
-        if (canDo){
+        // 读取限流配置
+        String limitCategory = requestUri;
+        LimiterCategoryConfig config = limitersConfig.getConfigMap().get(limitCategory);
+
+        // 限流判断
+        boolean canDo = redisLimitChecker.canDo(limitKey, config);
+
+        if (canDo) {
+            // 放行
             log.info("limit pass. limitKey:{}, limitCategory:{}", limitKey, limitCategory);
-            return point.proceed();
+        } else {
+            log.error("limit block. limitKey:{}, limitCategory:{}", limitKey, limitCategory);
         }
 
-        log.error("limit block. limitKey:{}, limitCategory:{}", limitKey, limitCategory);
+        return canDo;
 
-        // 拦截
-        throw new RuntimeException("限流");
     }
 
 
     private String generateKey(Limiter limiterAnnotation, Map<String, Object> fieldsName) {
         //获取注解上的值如 :  @MyLimit(limitKey = "#user?.id")
         String keyEl = limiterAnnotation.limitKey();
-        log.info("@MyLimit limitKey:{}", keyEl);
+        if (StringUtils.isEmpty(keyEl)) {
+            throw new IllegalArgumentException("limiterAnnotation limitKey is empty");
+        }
 
         //创建解析器
         SpelExpressionParser parser = new SpelExpressionParser();
@@ -98,31 +115,50 @@ public class LimitAspect {
         //设置解析上下文(有哪些占位符，以及每种占位符的值)
         EvaluationContext context = new StandardEvaluationContext();
         if (fieldsName != null) {
-            fieldsName.entrySet().forEach(entry -> context.setVariable(entry.getKey(), entry.getValue()));
+            fieldsName.forEach(context::setVariable);
         }
 
         //解析,获取替换后的结果
-        String result = expression.getValue(context).toString();
-        log.info("@MyLimit resultKey:{}", result);
-        return result;
+        Object value = expression.getValue(context);
+        if (value == null) {
+            throw new IllegalArgumentException("limiterAnnotation expression.getValue is null.");
+        }
+
+        log.info("@Limit resultKey:{}", value);
+        return value.toString();
 
     }
 
     /**
      * 获取参数列表
      */
-    private static Map<String, Object> getFieldsName(ProceedingJoinPoint joinPoint) {
-        // 参数值
+    private static Map<String, Object> getFieldsName(JoinPoint joinPoint) {
+        // 参数值数组
         Object[] args = joinPoint.getArgs();
         ParameterNameDiscoverer pnd = new DefaultParameterNameDiscoverer();
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
         Method method = signature.getMethod();
+        // 参数名数组
         String[] parameterNames = pnd.getParameterNames(method);
+
         Map<String, Object> paramMap = new HashMap<>(32);
-        for (int i = 0; i < parameterNames.length; i++) {
-            paramMap.put(parameterNames[i], args[i]);
+        if (parameterNames != null) {
+            for (int i = 0; i < parameterNames.length; i++) {
+                paramMap.put(parameterNames[i], args[i]);
+            }
         }
         return paramMap;
     }
+
+
+    //
+    //    /**
+    //     * 对加有@RestController类下的所有方法生效
+    //     */
+    //    @Around("@within(org.springframework.web.bind.annotation.RestController)")
+    //    public Object aroundRestControllerAnno(ProceedingJoinPoint point) throws Throwable {
+    //        return process(point);
+    //    }
+
 
 }
