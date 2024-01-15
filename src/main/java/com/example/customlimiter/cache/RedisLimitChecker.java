@@ -29,8 +29,10 @@ public class RedisLimitChecker implements LimitChecker {
 
     /**
      * 1.根据key读取请求次数。 value存在；value不存在说明请求次数为0
-     * 2.写入请求次数+1，并设置过期时间
-     * 3.如果请求次数大于限制次数，则返回false，否则返回true
+     * 2.写入请求次数+1（当key不存在时会创建kv，当key存在时，v+1）
+     * 3.检查过期时间，过期了则更新过期时间
+     * （单独设置过期时间，避免并发赋值+过期时间导致计数值被覆盖的问题。但无法避免过期时间并发修改，但此问题可以容忍）
+     * 4.如果请求次数大于限制次数，则返回false，否则返回true
      */
     @Override
     public boolean canDo(String limitKey, String category) {
@@ -40,6 +42,8 @@ public class RedisLimitChecker implements LimitChecker {
         int currentQueryCount = Optional.ofNullable(integer).map(Integer::parseInt).orElse(0);
         log.info("limitKey:{}, currentQueryCount:{}", limitKey, currentQueryCount);
 
+        // 写入请求次数+1，并设置过期时间
+        stringRedisTemplate.opsForValue().increment(limitKey);
 
         // 读取当前category 对应的限制配置
         LimitConfig limitConfig = limitConfigMap.get(category);
@@ -47,15 +51,10 @@ public class RedisLimitChecker implements LimitChecker {
             return true;
         }
 
-        // 设置过期时间
+        // 设置过期时间检查，过期后重新设置过期时间
         Long expire = stringRedisTemplate.getExpire(limitKey, TimeUnit.MILLISECONDS);
         if (expire == null || expire <= 0) {
-            // 限流请求次数+1，写redis
-            stringRedisTemplate.opsForValue().set(limitKey, "1");
-            // 设置过期时间
             stringRedisTemplate.expire(limitKey, limitConfig.getTtlInMillis(), TimeUnit.MILLISECONDS);
-        }else {
-            stringRedisTemplate.opsForValue().increment(limitKey);
         }
 
         // 限流生效检查
